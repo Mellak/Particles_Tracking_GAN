@@ -43,6 +43,17 @@ interaction.
   each step. Each epoch the paths are augmented by random rotations (see `src/dataloader.py`).
   The GATE data are not distributed in this repository.
 
+| Generator | Discriminator |
+|---|---|
+| <img src="figures/generator.png" width="380"> | <img src="figures/discriminator.png" width="380"> |
+
+*Left: generator. Its inputs are the embedded number of interactions, a mask that is zero beyond that
+number, the initial energy and a random vector from N(0, 1). They are mapped to the sequence shape, encoded
+by a transformer encoder, and projected to the data features by a convolution. Right: discriminator.
+A ViT-like model where each patch is a path point (energy, x, y, z), with the embedded initial energy and
+number of interactions as inputs; it classifies the path as real or generated. Figures from Y. Mellak,
+PhD thesis, Chapter 4, Section 1 (generator and discriminator architecture figures).*
+
 ![Generated F-18 positron paths being traced in water and bone](figures/positron_paths.gif)
 
 *200 generated F-18 positron paths per material, from the released generators run on CPU with the demo
@@ -62,7 +73,7 @@ The released generators run on CPU or GPU.
 
 ```
 src/        models.py, dataloader.py, utils.py, sampling.py
-scripts/    train.py, generate.py
+scripts/    train.py, generate.py, make_animation.py
 notebooks/  Inference.ipynb
 weights/    G_F18_Water.pth, G_F18_RibBone.pth, G_F18_Lung.pth
 figures/
@@ -129,6 +140,18 @@ materials and both isotopes (up to 12% for F-18, in bone). The 1D point spread f
 overlap closely with GATE for the three materials. The Ga-68 columns come from the thesis extension, not
 from the weights in this repository (see [Thesis extensions](#thesis-extensions-not-all-in-this-repository)).
 
+**1D PSFs.** Distribution of path end points along x, y and z for paths starting at the origin, GATE
+("Real Points", green) vs GAN ("Fake Points", red):
+
+| | F-18 (weights in this repository) | Ga-68 (thesis only, weights not included) |
+|---|---|---|
+| Water | ![](figures/psf_water_f18.png) | ![](figures/psf_water_ga68.png) |
+| Lung | ![](figures/psf_lung_f18.png) | ![](figures/psf_lung_ga68.png) |
+| Bone | ![](figures/psf_bone_f18.png) | ![](figures/psf_bone_ga68.png) |
+
+*PSFs for F-18 vs Ga-68 in lung, water and bone along the x, y and z axes. From Y. Mellak, PhD thesis,
+Chapter 4, Section 1 (figure comparing F-18 and Ga-68 PSFs in three materials).*
+
 **Speed.** The paper reports about 6 s for 20,000 paths with the GAN (batch of 20,000 events) against about
 45 s with GATE for the same setup (three point sources of 0.2 MBq in 5 cm radius spheres). The thesis
 chapter does not repeat this comparison. These timings depend on hardware and on the GATE configuration
@@ -175,6 +198,18 @@ in this repository.** The following is described in the thesis and is not includ
   to denser material, whereas RGIMMT stays close to GATE across the transitions. The RGIMMT code, the
   Ga-68 code and weights, the energy-to-interactions histograms and the phantom are not in this
   repository.
+
+<img src="figures/rgimmt_pipeline.png" width="420">
+
+*Positron simulation in a heterogeneous medium with the GAN (RGIMMT). From Y. Mellak, PhD thesis,
+Chapter 4, Section 1 (diagram of the positron simulation process in a heterogeneous medium).*
+
+<img src="figures/heterogeneous_slice50.png" width="600">
+
+*Simulation in heterogeneous materials at slice 50: (a) material map, (b) activity, (c) GATE annihilations,
+(d) annihilations predicted by the direct GAN, (e) annihilations predicted by RGIMMT. From Y. Mellak,
+PhD thesis, Chapter 4, Section 1 (heterogeneous simulation figure; panels re-assembled for this README).
+Not reproducible with this repository.*
 
 ## Why this led to DDConv
 
