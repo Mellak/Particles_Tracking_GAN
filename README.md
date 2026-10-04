@@ -1,65 +1,93 @@
 # Fast-Track of F-18 Positron Paths Simulations Using GANs
 
-Code and trained generators for the ISBI 2024 paper
-*Fast-Track of F-18 Positron Paths Simulations Using GANs*
-(Y. Mellak, K. Chatzipapas, A. Bousse, C. Chez-Le Rest, D. Visvikis, J. Bert),
-[DOI 10.1109/ISBI56570.2024.10635834](https://doi.org/10.1109/ISBI56570.2024.10635834),
-[arXiv:2403.06307](https://arxiv.org/abs/2403.06307).
+This repository contains the code and the trained generators for this paper:
 
-The method is also described, with extensions, in Chapter 4 (section 1) of the PhD thesis of Y. Mellak
-([HAL tel-05465688](https://theses.hal.science/tel-05465688)). "The thesis" below refers to that chapter.
+> Y. Mellak, K. Chatzipapas, A. Bousse, C. Chez-Le Rest, D. Visvikis, J. Bert.
+> *Fast-Track of F-18 Positron Paths Simulations Using GANs.*
+> IEEE International Symposium on Biomedical Imaging (ISBI), 2024.
+
+| | Link |
+|---|---|
+| Published paper (IEEE) | [doi.org/10.1109/ISBI56570.2024.10635834](https://doi.org/10.1109/ISBI56570.2024.10635834) |
+| arXiv | [arxiv.org/abs/2403.06307](https://arxiv.org/abs/2403.06307) |
+| Code | [github.com/Mellak/Particles_Tracking_GAN](https://github.com/Mellak/Particles_Tracking_GAN) (this repository) |
+| PhD thesis (Chapter 4, Section 1) | [theses.hal.science/tel-05465688](https://theses.hal.science/tel-05465688) |
+| Next work: DDConv | [Paper](https://doi.org/10.1109/TRPMS.2025.3647264), [arXiv](https://arxiv.org/abs/2503.00587), [code](https://github.com/Mellak/ddconv-prc) |
+
+The PhD thesis of Y. Mellak also describes this method and adds extensions.
+In this README, "the thesis" refers to Chapter 4, Section 1 of the
+[thesis](https://theses.hal.science/tel-05465688).
+
+<p align="center">
+  <img src="figures/positron_paths.gif" alt="Generated F-18 positron paths in water and bone" width="640">
+</p>
+<p align="center"><em>
+200 generated F-18 positron paths in water and 200 in bone.
+The released generators made these paths on a CPU, with the demo conditions (see "Generate paths").
+The script <code>scripts/make_animation.py</code> makes this animation.
+</em></p>
 
 ## Motivation
 
-Monte Carlo (MC) simulation is the reference for modelling positron transport in PET. Its particle-tracking
-stage, where each positron is followed step by step until annihilation, is costly, which limits its use
-when many events or fast turnaround are needed. This repository explores a data-driven alternative: a
-generative network that produces a complete positron trajectory (3D positions and remaining kinetic energy
-at each interaction) in a homogeneous medium. Annihilation distributions are obtained by binning the end
-points of the generated paths.
+Monte Carlo (MC) simulation is the reference method to model the transport of positrons in PET.
+MC simulation follows each positron step by step until the annihilation.
+This particle tracking takes much time.
+Thus, it is difficult to use MC simulation when you must simulate many events quickly.
+
+This repository examines a different method.
+A generative neural network makes the full path of a positron in a homogeneous material.
+Each path gives the 3D position and the remaining kinetic energy at each interaction.
+To get the annihilation distribution, put the end points of the paths into a voxel grid.
 
 ## Method
 
-A positron path is a matrix of `N` interactions with 4 features each: remaining kinetic energy and
-(x, y, z) position. Paths start at the origin; energy decreases along the path and is zero at the last
-interaction.
+A positron path is a matrix with `N` rows, one row for each interaction.
+Each row has four values: the remaining kinetic energy and the position (x, y, z).
+Each path starts at the origin.
+The energy decreases along the path. The energy is zero at the last interaction.
 
-- **Generator** (`src/models.py`, `GeneratorNumIntEnergyDirection2`): a transformer encoder. Its input is
-  a random vector (N(0, 1), dimension 100) concatenated with the embedded number of interactions, a mask
-  that is zero beyond that number, the initial energy and the initial direction. The input is mapped to a
-  sequence, the transformer encoder produces an embedding per sequence point, and a 1x1 convolution maps
-  the embeddings to the four data features.
-- **Discriminator** (`ViTwMask2`): a ViT-style binary classifier where each path point is a patch. It
-  receives the path together with the embedded initial energy and number of interactions, with padding
-  masked out.
-- **Conditioning**: initial energy, number of interactions (which sets the path length, 3 to 18 for F-18)
-  and initial direction.
-- **Loss**: least-squares GAN loss, plus (i) a cosine term between the direction of the first path segment
-  and the requested direction, which gives control over the emission direction, and (ii) two energy
-  regularisers that penalise negative energies and energies that increase along the path, weighted by
-  0.005. See `scripts/train.py`.
-- **Training data**: GATE MC simulations of a point source at the origin in a 50 cm radius sphere, with
-  the F-18 spectrum, in water, lung and bone, about 10,000 events per material. A phase-space actor records
-  each step. Each epoch the paths are augmented by random rotations (see `src/dataloader.py`).
-  The GATE data are not distributed in this repository.
+- **Generator** (`GeneratorNumIntEnergyDirection2` in `src/models.py`).
+  The generator is a transformer encoder.
+  Its input is a random vector from N(0, 1), with 100 values.
+  The generator adds the embedded number of interactions, a mask, the initial energy and the initial direction to this vector.
+  The mask is zero after the last interaction.
+  A linear layer changes this input into a sequence.
+  The transformer encoder makes one embedding for each point of the sequence.
+  A 1x1 convolution changes each embedding into the four data values.
+- **Discriminator** (`ViTwMask2` in `src/models.py`).
+  The discriminator is a binary classifier, similar to a Vision Transformer (ViT).
+  Each point of the path is one patch.
+  The discriminator also receives the embedded initial energy and number of interactions.
+  It ignores the padding after the last interaction.
+- **Conditions.** The generator uses three conditions: the initial energy, the number of interactions and the initial direction.
+  The number of interactions sets the length of the path. For F-18, this length is from 3 to 18.
+- **Loss.** The training uses the least-squares GAN loss, with two more terms:
+  - A cosine term compares the direction of the first segment of the path with the necessary direction.
+    This term lets you control the initial direction of the positron.
+  - Two energy terms add a penalty when the energy is negative or when the energy increases along the path.
+    The weight of these terms is 0.005.
 
-| Generator | Discriminator |
-|---|---|
-| <img src="figures/generator.png" width="380"> | <img src="figures/discriminator.png" width="380"> |
+  Refer to `scripts/train.py`.
+- **Training data.** GATE MC simulations supplied the training data.
+  A point source is at the origin, in a sphere with a radius of 50 cm.
+  The simulations use the F-18 energy spectrum in water, lung and bone, with approximately 10,000 events for each material.
+  A phase-space actor records each step of each positron.
+  At each epoch, random rotations change the paths (refer to `src/dataloader.py`).
+  This repository does not contain the GATE data.
 
-*Left: generator. Its inputs are the embedded number of interactions, a mask that is zero beyond that
-number, the initial energy and a random vector from N(0, 1). They are mapped to the sequence shape, encoded
-by a transformer encoder, and projected to the data features by a convolution. Right: discriminator.
-A ViT-like model where each patch is a path point (energy, x, y, z), with the embedded initial energy and
-number of interactions as inputs; it classifies the path as real or generated. Figures from Y. Mellak,
-PhD thesis, Chapter 4, Section 1 (generator and discriminator architecture figures).*
-
-![Generated F-18 positron paths being traced in water and bone](figures/positron_paths.gif)
-
-*200 generated F-18 positron paths per material, from the released generators run on CPU with the demo
-conditions. Created with `scripts/make_animation.py`.*
+<p align="center">
+  <img src="figures/generator.png" alt="Generator architecture" height="420">
+  &nbsp;&nbsp;&nbsp;
+  <img src="figures/discriminator.png" alt="Discriminator architecture" height="420">
+</p>
+<p align="center"><em>
+Left: the generator. Right: the discriminator.
+Figures from Y. Mellak, <a href="https://theses.hal.science/tel-05465688">PhD thesis</a>, Chapter 4, Section 1.
+</em></p>
 
 ## Install
+
+Do these steps:
 
 ```bash
 git clone https://github.com/Mellak/Particles_Tracking_GAN.git
@@ -67,7 +95,7 @@ cd Particles_Tracking_GAN
 pip install -r requirements.txt
 ```
 
-The released generators run on CPU or GPU.
+The released generators operate on a CPU or on a GPU.
 
 ## Repository layout
 
@@ -81,50 +109,65 @@ figures/
 
 ## Train
 
-Training needs GATE phase-space files named `positrons_<k>.npy`, each an array of shape
-`(events, steps, 4)` with rows `(energy [MeV], x, y, z [mm])`, zero-padded after the last interaction
-(at least one all-zero row per event).
+To train a model, you must have GATE phase-space files.
+The name of each file is `positrons_<k>.npy`.
+Each file contains an array with the shape `(events, steps, 4)`.
+Each row is `(energy [MeV], x [mm], y [mm], z [mm])`.
+After the last interaction, the rows are zero. Each event must have at least one row of zeros.
+
+To start the training, use this command:
 
 ```bash
 python scripts/train.py --data-dir /path/to/WaterF18 --material Water --emitter F18 --output-dir runs
 ```
 
-Defaults match the original script: batch size 30, generator learning rate 1e-4 (discriminator 3e-4),
-Adam, 10,000 epochs, files with `0 < k < 20`. Checkpoints, per-epoch generator weights and
-diagnostic figures are written under `runs/<emitter>/<material>/`; training resumes automatically from the
-checkpoint. Run `python scripts/train.py --help` for all options.
+The default values are the same as in the original script:
+
+- Batch size: 30.
+- Learning rate: 1e-4 for the generator and 3e-4 for the discriminator (Adam).
+- Number of epochs: 10,000.
+- Files: `positrons_<k>.npy` with `0 < k < 20`.
+
+The script writes the checkpoints, the generator weights of each epoch and the diagnostic figures in `runs/<emitter>/<material>/`.
+If a checkpoint is available, the training continues from that checkpoint.
+To see all the options, use `python scripts/train.py --help`.
 
 ## Generate paths
 
-With the released F-18 weights:
+To generate paths with the released F-18 weights, use this command:
 
 ```bash
 python scripts/generate.py --material Water --num-paths 20000 --output water_paths.npz
 ```
 
-`--material` is `Water`, `RibBone` or `Lung`. The output `.npz` holds `paths` of shape `(events, 18, 4)`
-(energy, x, y, z; MeV and mm) and the conditions, and the script prints R_mean and R_max of the generated
-end points.
+The value of `--material` is `Water`, `RibBone` or `Lung`.
+The output `.npz` file contains `paths`, with the shape `(events, 18, 4)`, and the conditions.
+The columns of `paths` are energy (MeV), x, y and z (mm).
+The script also shows R_mean and R_max of the end points.
 
-The generator needs the conditions (initial energy, number of interactions, direction). Two sources:
+The generator needs three conditions: the initial energy, the number of interactions and the direction.
+There are two sources for these conditions:
 
-- `--data-dir /path/to/WaterF18`: reuse the conditions of GATE events, and also load the GATE paths for
-  comparison. This is the setting of the paper and the thesis.
-- default ("demo" conditions): an analytic F-18 beta+ spectrum, isotropic directions, and a stand-in rule
-  mapping energy to number of interactions (`src/sampling.py`). In the paper and thesis, the number of
-  interactions comes from an energy-to-interactions histogram built from the GATE data, which is not
-  distributed here. The stand-in rule has two coefficients per material, tuned so that the generated
-  R_mean and R_max come out close to the F-18 values in the Results table. It is therefore not an
-  independent check of the generators. Use `--data-dir` for any quantitative comparison
-  (see [Limitations](#limitations)).
+- **GATE data** (`--data-dir /path/to/WaterF18`).
+  The script uses the conditions of the GATE events.
+  It also loads the GATE paths, for a comparison.
+  The paper and the thesis use this procedure.
+- **Demo conditions** (default).
+  The script uses an analytic F-18 beta+ spectrum, isotropic directions and a simple rule that gives the number of interactions from the energy (`src/sampling.py`).
+  In the paper and the thesis, a histogram from the GATE data gives the number of interactions.
+  This repository does not contain this histogram.
+  The simple rule has two coefficients for each material.
+  We tuned these coefficients to get R_mean and R_max near the F-18 values in the Results table.
+  Thus, the demo conditions do not give an independent check of the generators.
+  For a quantitative comparison, use `--data-dir` (refer to "Limitations").
 
-`notebooks/Inference.ipynb` is the original inference notebook, updated for the new layout. It needs GATE
-data, like `--data-dir`.
+The notebook `notebooks/Inference.ipynb` is the original inference notebook, updated for the new layout.
+The notebook also needs GATE data.
 
 ## Results
 
-All numbers below are from the thesis (chapter 4, section 1), with GATE as reference: mean (`R_mean`) and
-maximum (`R_max`) radius of the end points of the paths.
+The values in this section come from the thesis. GATE is the reference.
+R_mean is the mean radius of the end points of the paths. R_max is the maximum radius.
 
 | Material | | F-18 R_mean | F-18 R_max | Ga-68 R_mean | Ga-68 R_max |
 |---|---|---|---|---|---|
@@ -135,94 +178,154 @@ maximum (`R_max`) radius of the end points of the paths.
 | Lung | GATE | 1.92 mm | 7.82 mm | 9.00 mm | 34.51 mm |
 | | GAN | 1.93 mm | 7.60 mm | 8.22 mm | 29.24 mm |
 
-R_mean agrees closely with GATE. R_max, a statistic of the tail, differs by up to 13% across all
-materials and both isotopes (up to 12% for F-18, in bone). The 1D point spread functions along x, y and z
-overlap closely with GATE for the three materials. The Ga-68 columns come from the thesis extension, not
-from the weights in this repository (see [Thesis extensions](#thesis-extensions-not-all-in-this-repository)).
+- R_mean of the GAN is very near to R_mean of GATE.
+- R_max shows the tail of the distribution. The difference in R_max is less than 13% for all materials and the two isotopes.
+  For F-18, the maximum difference is 12%, in bone.
+- For the three materials, the 1D point spread functions (PSFs) of the GAN are very near to the PSFs of GATE.
+- The Ga-68 values come from the thesis. This repository does not contain the Ga-68 weights (refer to "Thesis extensions").
 
-**1D PSFs.** Distribution of path end points along x, y and z for paths starting at the origin, GATE
-("Real Points", green) vs GAN ("Fake Points", red):
+**1D PSFs.** The figures below show the distribution of the end points along x, y and z.
+All paths start at the origin. "Real Points" (green) are GATE. "Fake Points" (red) are the GAN.
 
-| | F-18 (weights in this repository) | Ga-68 (thesis only, weights not included) |
-|---|---|---|
-| Water | ![](figures/psf_water_f18.png) | ![](figures/psf_water_ga68.png) |
-| Lung | ![](figures/psf_lung_f18.png) | ![](figures/psf_lung_ga68.png) |
-| Bone | ![](figures/psf_bone_f18.png) | ![](figures/psf_bone_ga68.png) |
+<p align="center"><strong>Water</strong> &nbsp;(left: F-18, right: Ga-68)</p>
+<p align="center">
+  <img src="figures/psf_water_f18.png" alt="PSF water F-18" width="49%">
+  <img src="figures/psf_water_ga68.png" alt="PSF water Ga-68" width="49%">
+</p>
+<p align="center"><strong>Lung</strong> &nbsp;(left: F-18, right: Ga-68)</p>
+<p align="center">
+  <img src="figures/psf_lung_f18.png" alt="PSF lung F-18" width="49%">
+  <img src="figures/psf_lung_ga68.png" alt="PSF lung Ga-68" width="49%">
+</p>
+<p align="center"><strong>Bone</strong> &nbsp;(left: F-18, right: Ga-68)</p>
+<p align="center">
+  <img src="figures/psf_bone_f18.png" alt="PSF bone F-18" width="49%">
+  <img src="figures/psf_bone_ga68.png" alt="PSF bone Ga-68" width="49%">
+</p>
+<p align="center"><em>
+PSFs for F-18 and Ga-68 in water, lung and bone, along the x, y and z axes.
+This repository contains the F-18 weights only.
+Figures from Y. Mellak, <a href="https://theses.hal.science/tel-05465688">PhD thesis</a>, Chapter 4, Section 1.
+</em></p>
 
-*PSFs for F-18 vs Ga-68 in lung, water and bone along the x, y and z axes. From Y. Mellak, PhD thesis,
-Chapter 4, Section 1 (figure comparing F-18 and Ga-68 PSFs in three materials).*
+**Speed.** The paper gives these values:
 
-**Speed.** The paper reports about 6 s for 20,000 paths with the GAN (batch of 20,000 events) against about
-45 s with GATE for the same setup (three point sources of 0.2 MBq in 5 cm radius spheres). The thesis
-chapter does not repeat this comparison. These timings depend on hardware and on the GATE configuration
-(physics list, cuts), and were not re-measured for this README. The generator is small (about 1 MB of
-weights each) and can generate large batches in one shot.
+- The GAN generates 20,000 paths in approximately 6 s, with one batch of 20,000 events.
+- GATE needs approximately 45 s for the same simulation (three point sources of 0.2 MBq in spheres with a radius of 5 cm).
+
+The thesis does not give this comparison again.
+These times change with the hardware and with the GATE configuration (physics list, cuts).
+We did not measure these times again for this README.
+Each generator is small (approximately 1 MB of weights) and can generate large batches in one operation.
 
 ## Limitations
 
-These are the limitations stated in the thesis discussion, plus what is specific to this repository:
+The thesis gives these limitations. Some items are specific to this repository.
 
-- One model is needed per radionuclide and per material, since the spectrum and the number of interactions
-  depend on both.
-- The generator needs the number of interactions as an input, to define the output length and the padding.
-  It comes from a histogram over GATE data and is not available in this repository (hence the demo
-  conditions above). This becomes problematic at material boundaries, where the number of interactions of
-  the remaining track is inferred from the residual energy through the same histogram.
-- Training data in voxelised or heterogeneous GATE volumes contain many extra steps near boundaries
-  (hundreds of steps per track), which makes a single consistent model hard to train. The thesis proposes
-  simplified MC tracks and an autoregressive model as future work.
-- Diffusion-based training of the same generator (400 steps) was explored in the thesis; it removes the
-  need for the number of interactions but multiplies generation time by 400.
-- Material boundaries remain the most sensitive case. The models in this repository are for homogeneous
-  media only.
+- You must train one model for each radionuclide and for each material.
+  The energy spectrum and the number of interactions change with the radionuclide and the material.
+- The generator needs the number of interactions as an input.
+  This number sets the length of the output and the padding.
+  A histogram from the GATE data gives this number. This repository does not contain this histogram.
+  At a boundary between two materials, the residual energy and the same histogram give the number of interactions for the remaining track.
+  This approximation can cause discontinuities.
+- In voxelized or heterogeneous GATE volumes, GATE adds many steps near the boundaries.
+  A track can have hundreds of steps.
+  Thus, it is difficult to train one consistent model on these data.
+  For future work, the thesis proposes simplified MC tracks and an autoregressive model.
+- The thesis also examined a diffusion training of the same generator, with 400 steps.
+  This procedure does not need the number of interactions.
+  But the time to generate the paths is 400 times longer.
+- The boundaries between materials are the most sensitive areas.
+  The models in this repository are for homogeneous materials only.
 
 ## Thesis extensions (not all in this repository)
 
-Chapter 4 of the thesis extends the paper in two ways. **Only the F-18 water, lung and bone generators are
-in this repository.** The following is described in the thesis and is not included here:
+Chapter 4 of the [thesis](https://theses.hal.science/tel-05465688) adds two extensions to the paper.
 
-- **Ga-68.** Generators for Ga-68, whose higher-energy positrons have up to 30 interactions per path
-  (instead of 18), trained in water, lung and bone. The training code accepts `--emitter Ga68`
-  (30 steps), but this path has not been tested here and no Ga-68 weights are provided. The Ga-68 numbers in
-  the results table are from the thesis.
-- **RGIMMT**, recursive generation for heterogeneous materials. For each material in a voxelised phantom,
-  the number of positrons is computed from the activity. Each positron is generated with the generator of
-  its material, conditioned on an energy sampled from the isotope spectrum, a number of interactions from
-  the energy-to-interactions histogram, and an isotropic direction, then placed at an emission point in
-  an active voxel. If the path crosses a material boundary, it is truncated at the interface, and the
-  generator of the new material is called again from the state at the crossing (position, direction,
-  residual energy). This repeats until the track ends inside a material, and the end point is binned in
-  the annihilation volume. The thesis phantom is a rod of four spheres joined by a bridge (400x100x100
-  voxels of 1 mm^3, 20 million events), spanning bone, water and lung. The thesis reports that, in
-  such a phantom, the direct GAN overestimates the positron range when crossing from low-density
-  to denser material, whereas RGIMMT stays close to GATE across the transitions. The RGIMMT code, the
-  Ga-68 code and weights, the energy-to-interactions histograms and the phantom are not in this
-  repository.
+> **Important:** This repository contains only the F-18 generators for water, lung and bone.
+> The items below are in the thesis. They are not in this repository.
 
-<img src="figures/rgimmt_pipeline.png" width="420">
+**Ga-68.**
+The thesis trains generators for Ga-68 in water, lung and bone.
+Ga-68 positrons have a higher energy. Their paths have up to 30 interactions, not 18.
+The training script accepts `--emitter Ga68` (30 steps), but we did not test this option.
+This repository does not contain Ga-68 weights.
+The Ga-68 values in the Results table come from the thesis.
 
-*Positron simulation in a heterogeneous medium with the GAN (RGIMMT). From Y. Mellak, PhD thesis,
-Chapter 4, Section 1 (diagram of the positron simulation process in a heterogeneous medium).*
+**RGIMMT (recursive generation in heterogeneous materials).**
+This procedure simulates positrons in a voxelized phantom with more than one material:
 
-<img src="figures/heterogeneous_slice50.png" width="600">
+1. For each material, the activity gives the number of positrons.
+2. The generator of the material generates each positron.
+   The conditions are an energy from the spectrum of the isotope, a number of interactions from the histogram and an isotropic direction.
+3. The procedure puts each path at an emission point in an active voxel.
+4. If the path crosses a boundary between two materials, the procedure cuts the path at the boundary.
+5. The procedure gets the position, the direction and the residual energy at the boundary.
+   Then, the generator of the new material continues the track from this state.
+6. The procedure repeats steps 4 and 5 until the track stops in one material.
+   Then, it adds the end point to the annihilation volume.
 
-*Simulation in heterogeneous materials at slice 50: (a) material map, (b) activity, (c) GATE annihilations,
-(d) annihilations predicted by the direct GAN, (e) annihilations predicted by RGIMMT. From Y. Mellak,
-PhD thesis, Chapter 4, Section 1 (heterogeneous simulation figure; panels re-assembled for this README).
-Not reproducible with this repository.*
+The phantom of the thesis is a rod with four spheres, connected by a bridge.
+The grid is 400x100x100 voxels of 1 mm³, with 20 million events, in bone, water and lung.
+In this phantom, the direct GAN gives a positron range that is too large when the positron goes from lung into a denser material.
+RGIMMT stays near GATE at all the transitions.
+
+This repository does not contain these items:
+
+- The RGIMMT code.
+- The Ga-68 code and weights.
+- The energy-to-interactions histograms.
+- The heterogeneous phantom.
+
+<p align="center">
+  <img src="figures/rgimmt_pipeline.png" alt="RGIMMT pipeline" width="420">
+</p>
+<p align="center"><em>
+Simulation of positrons in a heterogeneous material with the GAN (RGIMMT).
+Figure from Y. Mellak, <a href="https://theses.hal.science/tel-05465688">PhD thesis</a>, Chapter 4, Section 1.
+</em></p>
+
+<p align="center">
+  <img src="figures/heterogeneous_slice50.png" alt="Heterogeneous simulation at slice 50" width="600">
+</p>
+<p align="center"><em>
+Simulation in heterogeneous materials, slice 50:
+(a) material map, (b) activity, (c) GATE annihilations, (d) direct GAN annihilations, (e) RGIMMT annihilations.
+Figure from Y. Mellak, <a href="https://theses.hal.science/tel-05465688">PhD thesis</a>, Chapter 4, Section 1 (panels put together for this README).
+You cannot make this figure again with this repository.
+</em></p>
 
 ## Why this led to DDConv
 
-The thesis explains why this particle-tracking approach was not used for positron range correction in image
-reconstruction, which was its initial purpose. In its recursive form, the method is computationally heavy
-in heterogeneous phantoms, where individual tracks can have hundreds of segments, and realistic scans
-involve hundreds of millions of positrons, so runtime is prohibitive. In addition, iterative reconstruction
-needs the transpose of the blur operator, which is not tractable for a path-wise simulation. The thesis
-therefore treats the positron range effect at the image level, with learned spatial transformations,
-whose cost depends on the image size rather than on the number of events. That work is the DDConv method:
-[github.com/Mellak/ddconv-prc](https://github.com/Mellak/ddconv-prc) (code to be released there).
+The first objective of this method was the correction of the positron range in PET image reconstruction.
+The thesis gives two reasons why we did not use the method for this objective:
+
+- **Time.** RGIMMT needs much computation in heterogeneous phantoms. One track can have hundreds of segments.
+  A real PET scan has hundreds of millions of positrons. Thus, the time is too long.
+- **No transpose.** Iterative reconstruction needs the transpose of the blur operator.
+  It is not possible to calculate this transpose for a path-by-path simulation.
+
+Thus, the thesis corrects the positron range at the image level, with learned spatial transformations.
+The cost of this correction changes with the size of the image, not with the number of events.
+This work is **DDConv** (Dual-Input Dynamic Convolution):
+
+> Y. Mellak, A. Bousse, T. Merlin, É. Émond, M. Hakulinen, D. Visvikis.
+> *Dual-Input Dynamic Convolution for Positron Range Correction in PET Image Reconstruction.*
+> IEEE Transactions on Radiation and Plasma Medical Sciences, 2025.
+
+DDConv uses a trained convolutional neural network (CNN) to find a local blurring kernel for each voxel.
+The training uses voxel-specific positron range PSFs from MC simulations.
+DDConv operates in an iterative reconstruction algorithm to correct the positron range.
+It is applicable to high-energy emitters such as Ga-68, and to interfaces such as bone-soft tissue and lung-soft tissue.
+
+- Published paper: [doi.org/10.1109/TRPMS.2025.3647264](https://doi.org/10.1109/TRPMS.2025.3647264)
+- arXiv: [arxiv.org/abs/2503.00587](https://arxiv.org/abs/2503.00587)
+- Code: [github.com/Mellak/ddconv-prc](https://github.com/Mellak/ddconv-prc)
 
 ## Citation
+
+If you use this code, please cite the paper:
 
 ```bibtex
 @inproceedings{mellak2024fasttrack,
@@ -237,6 +340,24 @@ whose cost depends on the image size rather than on the number of events. That w
 }
 ```
 
+For the extensions (Ga-68, RGIMMT), cite the thesis:
+[theses.hal.science/tel-05465688](https://theses.hal.science/tel-05465688).
+
+For the image-level positron range correction, cite DDConv:
+
+```bibtex
+@article{mellak2025ddconv,
+  title   = {Dual-Input Dynamic Convolution for Positron Range Correction in {PET} Image Reconstruction},
+  author  = {Mellak, Youness and Bousse, Alexandre and Merlin, Thibaut and
+             {\'E}mond, {\'E}lise and Hakulinen, Mikko and Visvikis, Dimitris},
+  journal = {IEEE Transactions on Radiation and Plasma Medical Sciences},
+  year    = {2025},
+  doi     = {10.1109/TRPMS.2025.3647264},
+  eprint  = {2503.00587},
+  archivePrefix = {arXiv}
+}
+```
+
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT. Refer to [LICENSE](LICENSE).
