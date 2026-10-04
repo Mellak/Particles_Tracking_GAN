@@ -1,5 +1,7 @@
 # Standard library imports
+import argparse
 import os
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -11,34 +13,33 @@ from torch.utils.data import Dataset, DataLoader
 from torch.autograd import Variable
 
 # Local imports from custom modules
-from models import GeneratorNumIntEnergyDirection2, ViTwMask2
-from utils import generate_3D_images
-from dataloader import DataSetNumIntEnergyDirection
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.models import GeneratorNumIntEnergyDirection2, ViTwMask2
+from src.utils import generate_3D_images
+from src.dataloader import DataSetNumIntEnergyDirection
 
-
-# Define constants and configurations
-POSITRON_EMITTER = "F18" # "F18" is an option
 LATENT_DIM = 100
-NUM_STEPS = 30 if POSITRON_EMITTER == "Ga62" else 18
 NUM_FEATURES = 4  # Energy, X, Y, Z
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-BATCH_SIZE = 30
-MATERIAL = "Water"
 
-DATA_DIR = f"/home/youness/data/Positron_Range_Project/WData/{MATERIAL}{POSITRON_EMITTER}/"
-MIN_SELECTION = 0
-MAX_SELECTION = 20
-LEARNING_RATE = 1e-4
-NUM_EPOCHS = 10000
 
-# Paths for saving models and outputs
-PATH_BASE    = f'/home/youness/data/Konstantinos_Model/Experiences{POSITRON_EMITTER}/{MATERIAL}/'
-PATH_WEIGHTS = os.path.join(PATH_BASE, 'Weights', f'TransfGAN_{MATERIAL}/')
-PATH_IMAGES  = os.path.join(PATH_BASE,  'Images', f'TransfGAN_{MATERIAL}/')
-PATH_KERNELS = os.path.join(PATH_BASE, 'Kernels', f'TransfGAN_{MATERIAL}/')
+def parse_args():
+    p = argparse.ArgumentParser(description="Train the positron-path GAN for one emitter and one material.")
+    p.add_argument("--data-dir", required=True,
+                   help="Folder with the GATE phase-space files positrons_<k>.npy, each of shape (events, steps, 4).")
+    p.add_argument("--output-dir", default="runs", help="Where checkpoints and figures are written.")
+    p.add_argument("--material", default="Water", help="Material label, used in output file names (e.g. Water, RibBone, Lung).")
+    p.add_argument("--emitter", default="F18", choices=["F18", "Ga68"],
+                   help="Positron emitter. Sets the path length (18 steps for F18, 30 for Ga68) unless --num-steps is given.")
+    p.add_argument("--num-steps", type=int, default=None, help="Maximum number of interactions per path.")
+    p.add_argument("--batch-size", type=int, default=30)
+    p.add_argument("--lr", type=float, default=1e-4, help="Generator learning rate (the discriminator uses 3x).")
+    p.add_argument("--epochs", type=int, default=10000)
+    p.add_argument("--min-selection", type=int, default=0,
+                   help="Use files positrons_<k>.npy with k > MIN_SELECTION ...")
+    p.add_argument("--max-selection", type=int, default=20, help="... and k < MAX_SELECTION.")
+    p.add_argument("--device", default=None, help="cuda or cpu. Default: cuda if available.")
+    return p.parse_args()
 
-for path in [PATH_WEIGHTS, PATH_IMAGES, PATH_KERNELS]:
-    os.makedirs(path, exist_ok=True)
 
 # Define loss functions
 def Energy_loss(generated_data):
@@ -51,7 +52,7 @@ def Energy_loss(generated_data):
 
 Criterion_Angle = nn.CosineSimilarity(dim=1, eps=1e-6) 
 
-def train_model_step(batch_size, discriminator, generator, d_optimizer, g_optimizer, real_paths, num_inter, energy, masks, start_vectors):
+def train_model_step(batch_size, device, discriminator, generator, d_optimizer, g_optimizer, real_paths, num_inter, energy, masks, start_vectors):
     
     d_optimizer.zero_grad()
    
@@ -61,7 +62,7 @@ def train_model_step(batch_size, discriminator, generator, d_optimizer, g_optimi
     real_validity = discriminator(real_paths_d, num_inter, energy, masks)
     
 
-    z = Variable(torch.randn(batch_size, LATENT_DIM)).cuda()
+    z = Variable(torch.randn(batch_size, LATENT_DIM)).to(device)
     fake_num_inter = num_inter #[torch.randperm(num_inter.size(0))]  # Shuffle the num_inter
     fake_paths = generator(z, fake_num_inter, energy, masks, start_vectors)
     fake_paths_d = fake_paths #torch.cat((outputf, fake_paths), dim=1)
@@ -99,46 +100,58 @@ def train_model_step(batch_size, discriminator, generator, d_optimizer, g_optimi
 
 # Main training loop
 def main():
+    args = parse_args()
+    device = torch.device(args.device or ('cuda' if torch.cuda.is_available() else 'cpu'))
+    num_steps = args.num_steps or (30 if args.emitter == 'Ga68' else 18)
+    material = args.material
+    path_base = os.path.join(args.output_dir, args.emitter, material)
+    path_weights = os.path.join(path_base, 'Weights', f'TransfGAN_{material}/')
+    path_images = os.path.join(path_base, 'Images', f'TransfGAN_{material}/')
+    path_kernels = os.path.join(path_base, 'Kernels', f'TransfGAN_{material}/')
+    for path in [path_weights, path_images, path_kernels]:
+        os.makedirs(path, exist_ok=True)
+
     # Load data, create dataset and dataloader
     # Load data and create dataset and dataloader
-    Input_data_list = [np.load(os.path.join(DATA_DIR, f)) for f in sorted(os.listdir(DATA_DIR)) if ("positrons_" in f and int(f.replace("positrons_", "").replace(".npy", "")) < MAX_SELECTION) and int(f.replace("positrons_", "").replace(".npy", "")) > MIN_SELECTION]
-    dataset     = DataSetNumIntEnergyDirection(Input_data_list, num_steps=NUM_STEPS, num_features=NUM_FEATURES)
-    dataloader  = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+    Input_data_list = [np.load(os.path.join(args.data_dir, f)) for f in sorted(os.listdir(args.data_dir)) if ("positrons_" in f and int(f.replace("positrons_", "").replace(".npy", "")) < args.max_selection) and int(f.replace("positrons_", "").replace(".npy", "")) > args.min_selection]
+    dataset     = DataSetNumIntEnergyDirection(Input_data_list, num_steps=num_steps, num_features=NUM_FEATURES)
+    dataloader  = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
     tdataloader = DataLoader(dataset, batch_size=10000, shuffle=True)
 
     # Define the generator and discriminator
-    generator      = GeneratorNumIntEnergyDirection2(seq_len=NUM_STEPS).to(DEVICE)
-    discriminator  = ViTwMask2(image_size=NUM_STEPS, patch_size=1, num_classes=1, channels=NUM_FEATURES, dim=64, depth=3, heads=4, mlp_dim=128).to(DEVICE)
+    generator      = GeneratorNumIntEnergyDirection2(seq_len=num_steps).to(device)
+    discriminator  = ViTwMask2(image_size=num_steps, patch_size=1, num_classes=1, channels=NUM_FEATURES, dim=64, depth=3, heads=4, mlp_dim=128).to(device)
 
     # Initialize optimizers
-    lr = 1e-4
+    lr = args.lr
     optimizer_G  = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.9, 0.999))
     optimizer_D  = torch.optim.Adam(discriminator.parameters(), lr=3*lr, betas=(0.9, 0.999))
 
     # Load checkpoint if exists
     Start_EPOCH = 0
-    if os.path.isfile(PATH_WEIGHTS+"Training_TransfGAN_"+MATERIAL+".pth"):
-        Start_EPOCH = load_checkpoint(generator, discriminator, optimizer_G, optimizer_D) + 1
+    checkpoint_file = os.path.join(path_weights, "Training_TransfGAN_" + material + ".pth")
+    if os.path.isfile(checkpoint_file):
+        Start_EPOCH = load_checkpoint(checkpoint_file, generator, discriminator, optimizer_G, optimizer_D, device) + 1
     else:
         print('----------Start from scratch------------')
     # Start training loop
-    for epoch in range(Start_EPOCH, NUM_EPOCHS):
+    for epoch in range(Start_EPOCH, args.epochs):
         print('Starting epoch {}...'.format(epoch), end=' ')
         step = 0
 
         for i, (real_path, num_inter, energy, masks, start_vector) in enumerate(dataloader):
-            if i == len(dataloader) - 1 and num_inter.shape[0] < BATCH_SIZE:
+            if i == len(dataloader) - 1 and num_inter.shape[0] < args.batch_size:
                 break
             step = epoch * len(dataloader) + i + 1
 
-            real_path = Variable(real_path).type(torch.float32).cuda()
-            num_inter = Variable(num_inter).type(torch.long).cuda()
-            energy = Variable(energy).type(torch.float32).cuda()
-            masks = Variable(masks).type(torch.float32).cuda()
-            start_vector = Variable(start_vector).type(torch.float32).cuda()
+            real_path = Variable(real_path).type(torch.float32).to(device)
+            num_inter = Variable(num_inter).type(torch.long).to(device)
+            energy = Variable(energy).type(torch.float32).to(device)
+            masks = Variable(masks).type(torch.float32).to(device)
+            start_vector = Variable(start_vector).type(torch.float32).to(device)
 
             generator.train()
-            g_loss, d_loss =  train_model_step(len(real_path), discriminator, generator, optimizer_D, optimizer_G, real_path, num_inter, energy, masks, start_vector)
+            g_loss, d_loss =  train_model_step(len(real_path), device, discriminator, generator, optimizer_D, optimizer_G, real_path, num_inter, energy, masks, start_vector)
             if i % 500 == 0:
                 print('scalars', {'g_loss': g_loss, 'd_loss': (d_loss)}, step)
         if epoch % 1 == 0:
@@ -147,14 +160,14 @@ def main():
                     real_path, num_inter, energy, masks, start_vector = batch
                     break
 
-                num_inter = num_inter.type(torch.long).to(DEVICE)#[:100]
-                energy = energy.type(torch.float32).to(DEVICE)#[:100]
-                masks = masks.type(torch.float32).to(DEVICE)#[:100]
-                real_path = real_path.type(torch.float32).to(DEVICE)#[:100]
-                start_vector = start_vector.type(torch.float32).to(DEVICE)#[:100]
+                num_inter = num_inter.type(torch.long).to(device)#[:100]
+                energy = energy.type(torch.float32).to(device)#[:100]
+                masks = masks.type(torch.float32).to(device)#[:100]
+                real_path = real_path.type(torch.float32).to(device)#[:100]
+                start_vector = start_vector.type(torch.float32).to(device)#[:100]
 
-                hidden = Variable(torch.randn(num_inter.shape[0], LATENT_DIM)).to(DEVICE)
-                fake_path_test = generator(hidden, num_inter, energy, masks, start_vector).to(DEVICE)
+                hidden = Variable(torch.randn(num_inter.shape[0], LATENT_DIM)).to(device)
+                fake_path_test = generator(hidden, num_inter, energy, masks, start_vector).to(device)
                 fake_path_test = fake_path_test * masks.unsqueeze(1).unsqueeze(1)
 
                 fake_path_test = fake_path_test[:, :, 0, :]
@@ -172,7 +185,7 @@ def main():
                 ax[2].imshow(generated_grid[generated_grid.shape[0]//2, :, :] - real_grid[generated_grid.shape[0]//2, :, :], cmap='bwr', vmin=-200, vmax=200)
                 ax[2].set_title("Generated-real")
                 # save the figure:
-                plt.savefig(PATH_KERNELS+"Kernel_"+str(epoch)+".png")
+                plt.savefig(path_kernels+"Kernel_"+str(epoch)+".png")
                 plt.close()
 
                 print('fake_path_test:\n', fake_path_test[0])
@@ -210,14 +223,14 @@ def main():
                 ax.set_zlabel('Z')
                 ax.legend()
 
-                plt.savefig(PATH_IMAGES+"example_"+str(epoch)+".png")
+                plt.savefig(path_images+"example_"+str(epoch)+".png")
                 plt.close()
-            save_checkpoint(epoch, generator, discriminator, optimizer_G, optimizer_D)
-            torch.save(generator.state_dict(), PATH_WEIGHTS+'generator'+MATERIAL+'_epch_'+str(epoch)+'.pth')
+            save_checkpoint(checkpoint_file, epoch, generator, discriminator, optimizer_G, optimizer_D)
+            torch.save(generator.state_dict(), path_weights+'generator'+material+'_epch_'+str(epoch)+'.pth')
 
 
 # Function to save a checkpoint
-def save_checkpoint(epoch, generator, discriminator, optimizer_G, optimizer_D):
+def save_checkpoint(checkpoint_file, epoch, generator, discriminator, optimizer_G, optimizer_D):
     state = {
         'epoch': epoch,
         'generator_state_dict': generator.state_dict(),
@@ -227,11 +240,11 @@ def save_checkpoint(epoch, generator, discriminator, optimizer_G, optimizer_D):
         'optimizer_D_state_dict':  optimizer_D.state_dict(),
 
     }
-    torch.save(state, PATH_WEIGHTS+"Training_TransfGAN_"+MATERIAL+".pth")
+    torch.save(state, checkpoint_file)
 
 # Function to load a checkpoint
-def load_checkpoint(generator, discriminator, optimizer_G, optimizer_D,):
-    checkpoint = torch.load(PATH_WEIGHTS+"Training_TransfGAN_"+MATERIAL+".pth")
+def load_checkpoint(checkpoint_file, generator, discriminator, optimizer_G, optimizer_D, device):
+    checkpoint = torch.load(checkpoint_file, map_location=device)
     generator.load_state_dict(checkpoint['generator_state_dict'])
     discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
     optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])

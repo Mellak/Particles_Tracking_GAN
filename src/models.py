@@ -1,16 +1,8 @@
-import os
-import numpy as np
-import pandas as pd
+import math
+
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
-from tqdm.notebook import tqdm
-import matplotlib.pyplot as plt
 from einops import rearrange
-import torchvision
-import time
-import math
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_seq_length=512):
@@ -106,7 +98,7 @@ class GeneratorNumIntEnergyDirection2(nn.Module):
 
         output[:, 1:, :, 0] = torch.zeros_like(output[:, 1:, :, 0])
         
-        final_energy_mask = torch.ones(num_inter.size(0), self.mask_lenght, dtype=torch.int).to('cuda')
+        final_energy_mask = torch.ones(num_inter.size(0), self.mask_lenght, dtype=torch.int, device=num_inter.device)
         _num_inter = num_inter - 1
         final_energy_mask[torch.arange(_num_inter.size(0)).unsqueeze(1), _num_inter.unsqueeze(1)] = 0
 
@@ -117,66 +109,7 @@ class GeneratorNumIntEnergyDirection2(nn.Module):
         output = output.transpose(1,2).reshape(-1, self.channels, H, W)
 
         return output
-'''     
-class GeneratorNumIntEnergyDirection2(nn.Module):
-    def __init__(self, seq_len=18, patch_size=1, channels=4, latent_dim=100, embed_dim=64, depth=3,
-                 num_heads=2, mlp_dim=128, forward_drop_rate=0.3, attn_drop_rate=0.3, lstm=False):
-        super(GeneratorNumIntEnergyDirection2, self).__init__()
-        self.channels = channels
-        self.latent_dim = latent_dim
-        self.seq_len = seq_len
-        self.embed_dim = embed_dim
-        self.patch_size = patch_size
-        self.depth = depth
-        self.attn_drop_rate = attn_drop_rate
-        self.forward_drop_rate = forward_drop_rate
-        self.condtion_embed_dim = 10
-        self.mask_lenght = seq_len
-        
-        self.embedding_num_inter = nn.Embedding(seq_len+1 ,self.condtion_embed_dim)
-        self.l1 = nn.Linear(self.latent_dim + self.condtion_embed_dim + self.mask_lenght + 3 +1 , self.seq_len * self.embed_dim)
-        #self.pos_embed = nn.Parameter(torch.zeros(1, self.seq_len, self.embed_dim))
-        self.positional_encoding = PositionalEncoding(self.embed_dim, self.seq_len)
-        
-        self.blocks = Transformer2(self.embed_dim, self.depth, num_heads, mlp_dim)
-        
-        self.deconv = nn.Sequential(
-            nn.Conv2d(self.embed_dim, self.channels, 1, 1, 0)
-        )
-        
-        #self.deconv_mlp = nn.Sequential(nn.Linear(self.embed_dim, 128),nn.PReLU(),nn.Linear(128, self.channels))
 
-    def forward(self, z, num_inter, energy, masks, start_vector):
-        num_inter_embed = self.embedding_num_inter(num_inter)
-        z = torch.cat((z, num_inter_embed, masks, start_vector, energy.unsqueeze(-1)), dim=1)
-
-        x = self.l1(z).view(-1, self.seq_len, self.embed_dim)
-        x = self.positional_encoding(x)
-
-        H, W = 1, self.seq_len
-        x = self.blocks(x, mask=generate_padding_mask(masks))
-        x = x.reshape(x.shape[0], 1, x.shape[1], x.shape[2])
-        #output = self.deconv_mlp(x)
-        #output = output.permute(0, 3, 1, 2)
-        output = self.deconv(x.permute(0, 3, 1, 2))
-        output = output.view(-1, self.channels, H, W)
-
-        #---Post processing---
-        output[:, 0, 0, 0]  = 0*output[:, 0, 0, 0] + 1*energy
-
-        output[:, 1:, :, 0] = output[:, 1:, :, 0] * 0 #torch.zeros_like(output[:, 1:, :, 0])
-        
-        final_energy_mask = torch.ones(num_inter.size(0), self.mask_lenght, dtype=torch.int).to('cuda')
-        _num_inter = num_inter - 1
-        final_energy_mask[torch.arange(_num_inter.size(0)).unsqueeze(1), _num_inter.unsqueeze(1)] = 0
-
-        output[:, 0, 0, :] = output[:, 0, 0, :] * final_energy_mask
-
-        output = output[:,:,0,:].transpose(1,2) * masks.unsqueeze(-1)
-
-        output = output.transpose(1,2).reshape(-1, self.channels, H, W)
-
-        return output'''
  
 class ViTwMask2(nn.Module):
     def __init__(self, *, image_size, patch_size, num_classes, dim, depth, heads, mlp_dim, channels=3):
@@ -219,7 +152,7 @@ class ViTwMask2(nn.Module):
         x = torch.cat((cls_tokens, x), dim=1)
         
         # add one on the top of the mask by cat:
-        mask = torch.cat((torch.ones(mask.size(0),1, dtype=torch.int).to('cuda'), mask), dim=1)
+        mask = torch.cat((torch.ones(mask.size(0),1, dtype=torch.int, device=mask.device), mask), dim=1)
         x = self.positional_encoding(x)
         x = self.transformer(x, mask=generate_padding_mask(mask))
 
